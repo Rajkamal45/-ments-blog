@@ -49,10 +49,16 @@ export default function AdminBlogEditor() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [previewMode, setPreviewMode] = useState(false);
+  
+  // Newsletter states
+  const [sendNewsletter, setSendNewsletter] = useState(true);
+  const [newsletterStatus, setNewsletterStatus] = useState("");
+  const [subscriberCount, setSubscriberCount] = useState(0);
 
   useEffect(() => {
     checkAdminAuth();
     fetchCategories();
+    fetchSubscriberCount();
   }, []);
 
   const checkAdminAuth = async () => {
@@ -93,6 +99,22 @@ export default function AdminBlogEditor() {
 
     if (data) {
       setCategories(data);
+    }
+  };
+
+  const fetchSubscriberCount = async () => {
+    try {
+      const { count, error } = await supabase
+        .from("newsletter_subscribers")
+        .select("*", { count: "exact", head: true })
+        .eq("is_active", true);
+      
+      if (!error) {
+        setSubscriberCount(count || 0);
+        console.log("Subscriber count:", count);
+      }
+    } catch (err) {
+      console.error("Error fetching subscriber count:", err);
     }
   };
 
@@ -208,9 +230,57 @@ export default function AdminBlogEditor() {
     }, 0);
   };
 
+  // NEWSLETTER SEND FUNCTION - SENDS FULL ARTICLE
+  const sendNewsletterToSubscribers = async (
+    blogId: string, 
+    title: string, 
+    slug: string, 
+    excerpt: string, 
+    featuredImage: string,
+    fullContent: string
+  ) => {
+    console.log("=== SENDING FULL ARTICLE NEWSLETTER ===");
+    console.log({ blogId, title, slug });
+    
+    try {
+      setNewsletterStatus("📧 Sending full article to subscribers...");
+      
+      const response = await fetch("/api/send-newsletter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blogId,
+          title,
+          slug,
+          excerpt,
+          featuredImage,
+          content: fullContent  // FULL BLOG CONTENT
+        }),
+      });
+
+      console.log("Newsletter API response status:", response.status);
+      const result = await response.json();
+      console.log("Newsletter API result:", result);
+
+      if (result.success) {
+        setNewsletterStatus(`✅ Full article sent to ${result.count} subscribers!`);
+      } else {
+        setNewsletterStatus(`⚠️ Newsletter failed: ${result.error || "Unknown error"}`);
+      }
+      
+      return result;
+    } catch (err: any) {
+      console.error("Newsletter send error:", err);
+      setNewsletterStatus(`❌ Newsletter error: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  };
+
+  // MAIN SAVE/PUBLISH FUNCTION
   const handleSave = async (status: "draft" | "published") => {
     setError("");
     setSuccess("");
+    setNewsletterStatus("");
 
     if (!post.title.trim()) {
       setError("Title is required");
@@ -247,17 +317,43 @@ export default function AdminBlogEditor() {
         likes: 0,
       };
 
-      const { error: insertError } = await supabase
+      const { data: insertedPost, error: insertError } = await supabase
         .from("blogs")
-        .insert(postData);
+        .insert(postData)
+        .select("id")
+        .single();
 
       if (insertError) throw insertError;
 
       setSuccess(status === "published" ? "Post published successfully!" : "Draft saved!");
 
+      // ========== AUTO SEND NEWSLETTER ON PUBLISH ==========
+      console.log("=== PUBLISH CHECK ===");
+      console.log("Status:", status);
+      console.log("Send Newsletter Toggle:", sendNewsletter);
+      console.log("Subscriber Count:", subscriberCount);
+      
+      if (status === "published" && sendNewsletter) {
+        console.log("✅ Conditions met - sending full article newsletter!");
+        
+        await sendNewsletterToSubscribers(
+          insertedPost.id,
+          post.title,
+          post.slug,
+          post.excerpt || "",
+          post.featured_image,
+          post.content  // FULL CONTENT
+        );
+      } else {
+        console.log("❌ Newsletter not sent. Reasons:");
+        if (status !== "published") console.log("  - Status is not 'published'");
+        if (!sendNewsletter) console.log("  - Newsletter toggle is OFF");
+      }
+      // =====================================================
+
       setTimeout(() => {
         router.push("/admin/dashboard");
-      }, 1500);
+      }, 3000);
     } catch (err: any) {
       setError(err.message || "Failed to save post");
     } finally {
@@ -394,6 +490,13 @@ export default function AdminBlogEditor() {
           </div>
         </div>
       )}
+      {newsletterStatus && (
+        <div style={{ maxWidth: 1400, margin: "16px auto 0", padding: "0 32px" }}>
+          <div style={{ backgroundColor: "#eff6ff", color: "#1d4ed8", padding: "12px 16px", borderRadius: 8, fontSize: 14 }}>
+            {newsletterStatus}
+          </div>
+        </div>
+      )}
 
       {/* Main Editor */}
       <main style={{ maxWidth: 1400, margin: "0 auto", padding: "32px" }}>
@@ -479,6 +582,50 @@ export default function AdminBlogEditor() {
 
           {/* Sidebar */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            
+            {/* Newsletter Toggle - IMPORTANT */}
+            <div style={{ backgroundColor: "#fefce8", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.1)", border: "2px solid #fbbf24" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <label style={{ fontSize: 15, fontWeight: 700, color: "#92400e" }}>📧 Auto Newsletter</label>
+                <button
+                  onClick={() => setSendNewsletter(!sendNewsletter)}
+                  style={{
+                    width: 52,
+                    height: 28,
+                    borderRadius: 14,
+                    border: "none",
+                    backgroundColor: sendNewsletter ? "#16a34a" : "#d1d5db",
+                    cursor: "pointer",
+                    position: "relative",
+                    transition: "background-color 0.2s"
+                  }}
+                >
+                  <div style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: "50%",
+                    backgroundColor: "white",
+                    position: "absolute",
+                    top: 2,
+                    left: sendNewsletter ? 26 : 2,
+                    transition: "left 0.2s",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.3)"
+                  }} />
+                </button>
+              </div>
+              <p style={{ fontSize: 13, color: "#a16207", margin: 0, lineHeight: 1.5 }}>
+                {sendNewsletter 
+                  ? `✅ Will email ${subscriberCount} subscriber${subscriberCount !== 1 ? 's' : ''} when published`
+                  : "❌ Newsletter disabled for this post"
+                }
+              </p>
+              {subscriberCount === 0 && (
+                <p style={{ fontSize: 12, color: "#dc2626", margin: "8px 0 0", fontWeight: 500 }}>
+                  ⚠️ No active subscribers yet
+                </p>
+              )}
+            </div>
+
             {/* Featured Image */}
             <div style={{ backgroundColor: "white", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}>
               <label style={{ display: "block", fontSize: 14, fontWeight: 600, marginBottom: 12, color: "#000" }}>🖼️ Featured Image</label>
@@ -564,16 +711,6 @@ export default function AdminBlogEditor() {
                 onChange={(e) => setPost((prev) => ({ ...prev, slug: e.target.value }))}
                 style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 14, outline: "none", color: "#000", backgroundColor: "#fff" }}
               />
-            </div>
-
-            {/* Tips */}
-            <div style={{ backgroundColor: "#f0f9ff", borderRadius: 12, padding: 20, border: "1px solid #bae6fd" }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, color: "#0369a1", marginBottom: 8 }}>💡 Tips</h3>
-              <ul style={{ fontSize: 13, color: "#0c4a6e", margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
-                <li>Use 📷 to insert images</li>
-                <li>Preview before publishing</li>
-                <li>Markdown is supported</li>
-              </ul>
             </div>
           </div>
         </div>
